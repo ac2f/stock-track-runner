@@ -209,6 +209,19 @@ def already_done(cust_dir, quote_id):
     return os.path.exists(marker_path(cust_dir, quote_id))
 
 
+EMPTY_NOTE = "tabaka kalemi yok, yalniz musteri klasoru"
+
+
+def marker_was_empty(cust_dir, quote_id):
+    """Isaret var ama o turda hic tabaka klasoru acilmamis mi (sunucu tam
+    tabaka satisini gondermedigi icin bos kalan eski isler)."""
+    try:
+        with open(marker_path(cust_dir, quote_id), "r", encoding="utf-8") as f:
+            return EMPTY_NOTE in f.read()
+    except OSError:
+        return False
+
+
 def _hide(path):
     if os.name == "nt":
         try:

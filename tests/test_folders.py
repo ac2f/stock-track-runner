@@ -265,6 +265,28 @@ class Poll(unittest.TestCase):
         self.assertNotIn(day + "/ozturk-reklam/001-pleksi-1220x2440--4pcs--2800um-akpolimer-dokme-beyaz",
                          tree(self.root))
 
+    def test_requested_job_reopens_when_first_run_had_no_sheets(self):
+        # Eski sunucu tam tabaka satisini tabakasiz gonderdi: isaret var ama bos.
+        state = R.State(os.path.join(self.dir, "state.json"))
+        sheets = FakeServer.jobs[0]["sheets"]
+        FakeServer.jobs[0]["sheets"] = []
+        R.poll_once(self.cfg, state, self.api)
+        R.flush_reports(state, self.api)
+        day = F.day_folder_name(datetime.date.today())
+        self.assertFalse(any("001-" in p for p in tree(self.root)))
+        # Duzeltilmis sunucu tabakayla gonderir, klasor yeniden istenir.
+        FakeServer.jobs[0]["sheets"] = sheets
+        FakeServer.requested = FakeServer.jobs
+        R.poll_requested(self.cfg, state, self.api)
+        R.flush_reports(state, self.api)
+        self.assertIn(day + "/ozturk-reklam/001-pleksi-1220x2440--2pcs--2800um-akpolimer-dokme-beyaz/002",
+                      tree(self.root))
+        # bir daha istense de ikinci kez istiflenmez
+        R.poll_requested(self.cfg, state, self.api)
+        R.flush_reports(state, self.api)
+        self.assertNotIn(day + "/ozturk-reklam/001-pleksi-1220x2440--4pcs--2800um-akpolimer-dokme-beyaz",
+                         tree(self.root))
+
     def test_missing_day_folder_is_reported_as_error(self):
         cfgp = os.path.join(self.dir, "c3.json")
         with open(cfgp, "w") as f:

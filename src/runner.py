@@ -31,11 +31,11 @@ import time
 from logging.handlers import RotatingFileHandler
 
 from config import Config
-from folders import already_done, customer_dir, day_folder_name, find_day_dir, make_groups, plan_groups, write_marker
+from folders import EMPTY_NOTE, already_done, customer_dir, marker_was_empty, day_folder_name, find_day_dir, make_groups, plan_groups, write_marker
 from status import add_recent, describe, now_iso, read_status, write_status
 from stocktrack import ServerError, StockTrack
 
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 STATE_PATH = os.path.join(BASE_DIR, "state.json")
@@ -110,27 +110,30 @@ def start_of_today_iso():
     return now.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(datetime.timezone.utc).isoformat()
 
 
-def process_job(job, cfg, rule):
-    """Bir teklifin klasorlerini acar. (musteri klasoru, yapilanlar, sorunlar)."""
+def process_job(job, cfg, rule, requested=False):
+    """Bir teklifin klasorlerini acar. (musteri klasoru, yapilanlar, sorunlar).
+    `requested`: StockTrack'ten yeniden istendi; isaret varsa yine atlanir,
+    yalniz o tur hic tabaka acilmamis ve simdi tabaka varsa yeniden acilir."""
     root = rule["base_dir"]
     cdir = customer_dir(root, rule, job["customerFolder"],
                         local_date(job["createdAt"]), local_date(job["convertedAt"]))
-    if already_done(cdir, job["id"]):
-        return cdir, ["zaten acilmis (isaret var)"], []
     plan = plan_groups(job.get("sheets") or [])
+    if already_done(cdir, job["id"]):
+        if not (requested and plan and marker_was_empty(cdir, job["id"])):
+            return cdir, ["zaten acilmis (isaret var)"], []
     header = "Quote %s  %s\n" % (job["quoteNo"], local_date(job["createdAt"]).isoformat())
     report, problems = make_groups(cdir, plan, cfg.group_separator(), cfg.long_sheet_mm(), header)
     if not plan:
-        report.append("tabaka kalemi yok, yalniz musteri klasoru")
+        report.append(EMPTY_NOTE)
     write_marker(cdir, job, report + problems)
     for p in problems:
         logger.warning("%s: %s", job["quoteNo"], p)
     return cdir, report, problems
 
 
-def handle_job(job, cfg, rule, state, status=None):
+def handle_job(job, cfg, rule, state, status=None, requested=False):
     """Klasorleri acar, bildirilecekler listesine ve son islere ekler."""
-    cdir, report, problems = process_job(job, cfg, rule)
+    cdir, report, problems = process_job(job, cfg, rule, requested)
     logger.info("%s -> %s\n    %s", job["quoteNo"], cdir, "\n    ".join(report + problems))
     state.done[job["id"]] = job["convertedAt"]
     state.unreported[job["id"]] = {
@@ -205,7 +208,7 @@ def poll_requested(cfg, state, api, status=None, errors=None):
         if job["id"] in state.unreported:
             continue  # acildi, bildirimi bekliyor
         try:
-            handle_job(job, cfg, rule, state, status)
+            handle_job(job, cfg, rule, state, status, requested=True)
         except OSError as exc:
             msg = "%s icin klasor acilamadi: %s" % (job["quoteNo"], exc)
             logger.error(msg)

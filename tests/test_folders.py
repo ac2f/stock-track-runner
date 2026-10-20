@@ -134,22 +134,40 @@ class Groups(unittest.TestCase):
 
 class FakeServer(BaseHTTPRequestHandler):
     jobs = []
+    requested = []
     calls = []
+    posts = []
 
-    def do_GET(self):
-        FakeServer.calls.append((self.path, self.headers.get("X-Api-Key")))
+    def _auth(self):
         if self.headers.get("X-Api-Key") != "k":
             self.send_response(401)
             self.end_headers()
             self.wfile.write(b'{"message":"Gecersiz anahtar"}')
+            return False
+        return True
+
+    def do_GET(self):
+        FakeServer.calls.append((self.path, self.headers.get("X-Api-Key")))
+        if not self._auth():
             return
         if self.path.startswith("/api/v1/corel/ping"):
             body = b"#ac2f-corel 1\nok\tAcme Reklam\n"
+        elif self.path.startswith("/api/v1/corel/jobs/requested"):
+            body = json.dumps({"success": True, "data": FakeServer.requested}).encode()
         else:
             body = json.dumps({"success": True, "data": FakeServer.jobs}).encode()
         self.send_response(200)
         self.end_headers()
         self.wfile.write(body)
+
+    def do_POST(self):
+        if not self._auth():
+            return
+        length = int(self.headers.get("Content-Length") or 0)
+        FakeServer.posts.append((self.path, json.loads(self.rfile.read(length) or b"{}")))
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b'{"success":true,"data":{"ok":true}}')
 
     def log_message(self, *a):
         pass
@@ -158,6 +176,8 @@ class FakeServer(BaseHTTPRequestHandler):
 class Poll(unittest.TestCase):
     def setUp(self):
         FakeServer.calls = []
+        FakeServer.posts = []
+        FakeServer.requested = []
         self.srv = HTTPServer(("127.0.0.1", 0), FakeServer)
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
         self.dir = tempfile.mkdtemp()
@@ -208,6 +228,106 @@ class Poll(unittest.TestCase):
             json.dump({"day_folders": {"base_dir": "", "renamer_config": rc}}, f)
         rule = Config(cfgp).day_rule()
         self.assertEqual((rule["base_dir"], rule["date_format"], rule["separator"]), ("D:\\Isler", "%d.%m.%Y", "_"))
+
+
+    def test_loop_reports_folders_heartbeat_and_status(self):
+        state = R.State(os.path.join(self.dir, "state.json"))
+        status_path = os.path.join(self.dir, "status.json")
+        status = {}
+        loop = R.Loop(self.cfg, state, status, status_path)
+        self.assertEqual(loop.tick(), 30)
+        paths = [p for p, _ in FakeServer.posts]
+        self.assertIn("/api/v1/corel/jobs/q1/folders", paths)
+        self.assertIn("/api/v1/corel/runner/heartbeat", paths)
+        report = dict(FakeServer.posts)["/api/v1/corel/jobs/q1/folders"]
+        self.assertTrue(report["folder"].endswith("ozturk-reklam"))
+        self.assertEqual(report["host"], R.HOST)
+        beat = dict(FakeServer.posts)["/api/v1/corel/runner/heartbeat"]
+        self.assertIsNone(beat["error"])
+        self.assertEqual(beat["dayRoot"], self.root)
+        saved = R.read_status(status_path)
+        self.assertTrue(saved["connected"])
+        self.assertEqual(saved["shopName"], "Acme Reklam")
+        self.assertEqual(saved["recent"][0]["quoteNo"], "TKF-2026-0007")
+        self.assertEqual(state.unreported, {})
+
+    def test_requested_job_is_reported_again_without_restacking(self):
+        state = R.State(os.path.join(self.dir, "state.json"))
+        R.poll_once(self.cfg, state, self.api)
+        R.flush_reports(state, self.api)
+        FakeServer.posts = []
+        FakeServer.requested = FakeServer.jobs
+        self.assertEqual(R.poll_requested(self.cfg, state, self.api), 1)
+        R.flush_reports(state, self.api)
+        report = dict(FakeServer.posts)["/api/v1/corel/jobs/q1/folders"]
+        self.assertIn("zaten acilmis", report["report"][0])
+        day = F.day_folder_name(datetime.date.today())
+        self.assertNotIn(day + "/ozturk-reklam/001-pleksi-1220x2440--4pcs--2800um-akpolimer-dokme-beyaz",
+                         tree(self.root))
+
+    def test_missing_day_folder_is_reported_as_error(self):
+        cfgp = os.path.join(self.dir, "c3.json")
+        with open(cfgp, "w") as f:
+            json.dump({"server": self.cfg["server"], "api_key": "k",
+                       "day_folders": {"base_dir": "", "renamer_config": os.path.join(self.dir, "yok.json")}}, f)
+        cfg = Config(cfgp)
+        status = {}
+        R.Loop(cfg, R.State(os.path.join(self.dir, "s3.json")), status, os.path.join(self.dir, "st3.json")).tick()
+        self.assertIn("Gun klasoru bilinmiyor", status["error"])
+        beat = dict(FakeServer.posts)["/api/v1/corel/runner/heartbeat"]
+        self.assertIn("Gun klasoru bilinmiyor", beat["error"])
+
+    def test_server_address_without_scheme_is_an_error_not_a_crash(self):
+        with self.assertRaises(R.ServerError):
+            StockTrack("192.168.1.50/api/v1", "k").ping()
+        with self.assertRaises(R.ServerError):
+            StockTrack("", "k").ping()
+
+
+class AddonSettings(unittest.TestCase):
+    """Corel eklentisinin kayit defteri ayarlari (Windows) bos alanlari doldurur."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+
+    def cfg(self, data, addon):
+        p = os.path.join(self.dir, "c.json")
+        with open(p, "w") as f:
+            json.dump(data, f)
+        return Config(p, addon_reader=lambda: dict(addon))
+
+    def test_connection_from_addon_when_runner_config_is_empty(self):
+        addon = {"server": "http://10.0.0.5/api/v1/", "api_key": "ak"}
+        self.assertEqual(self.cfg({}, addon).connection(), ("http://10.0.0.5/api/v1", "ak", "Corel eklentisi"))
+        # eski kurulumlardaki ornek adres bos sayilir
+        self.assertEqual(self.cfg({"server": "http://192.168.1.50/api/v1", "api_key": "own"}, addon).connection()[0],
+                         "http://10.0.0.5/api/v1")
+        # runner'in kendi degeri once gelir
+        self.assertEqual(self.cfg({"server": "http://x/api/v1", "api_key": "own"}, addon).connection(),
+                         ("http://x/api/v1", "own", "runner config.json"))
+
+    def test_day_root_precedence_matches_the_add_on(self):
+        rc = os.path.join(self.dir, "renamer.json")
+        with open(rc, "w") as f:
+            json.dump({"daily_folders": {"enabled": False, "base_dir": "C:\\Masaustu\\Gunluk",
+                                         "date_format": "%d.%m.%Y", "separator": "_"}}, f)
+        base = {"day_folders": {"base_dir": "", "renamer_config": rc}}
+        rule = self.cfg(base, {"day_root": "D:\\Isler\\"}).day_rule()
+        self.assertEqual((rule["base_dir"], rule["source"], rule["date_format"]), ("D:\\Isler", "Corel eklentisi", "%d.%m.%Y"))
+        rule = self.cfg(base, {}).day_rule()
+        self.assertEqual(rule["source"], "CDR Auto Renamer")
+        self.assertIn("kapali", rule["warning"])
+        own = {"day_folders": {"base_dir": "E:\\Is", "renamer_config": rc}}
+        rule = self.cfg(own, {"day_root": "D:\\Isler"}).day_rule()
+        self.assertEqual((rule["base_dir"], rule["date_format"]), ("E:\\Is", "%d-%m-%Y"))
+
+    def test_separator_and_long_sheet_from_addon(self):
+        cfg = self.cfg({}, {"separator": "__", "long_mm": "3500"})
+        self.assertEqual((cfg.group_separator(), cfg.long_sheet_mm()), ("__", 3500.0))
+        cfg = self.cfg({"group_separator": "--", "long_sheet_mm": 4000}, {"separator": "__", "long_mm": "3500"})
+        self.assertEqual((cfg.group_separator(), cfg.long_sheet_mm()), ("--", 4000.0))
+        cfg = self.cfg({}, {})
+        self.assertEqual((cfg.group_separator(), cfg.long_sheet_mm()), ("--", 4000.0))
 
 
 if __name__ == "__main__":

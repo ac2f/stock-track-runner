@@ -6,3 +6,6 @@ state.json.tmp
 *.log
 *.log.*
 .lock
+status.json
+status.json.tmp
+poll.now

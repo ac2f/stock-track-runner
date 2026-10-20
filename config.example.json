@@ -1,6 +1,6 @@
 {
   "enabled": true,
-  "server": "http://192.168.1.50/api/v1",
+  "server": "",
   "api_key": "",
   "poll_seconds": 30,
   "day_folders": {
@@ -9,8 +9,8 @@
     "date_format": "%d-%m-%Y",
     "separator": "--"
   },
-  "group_separator": "--",
-  "long_sheet_mm": 4000,
+  "group_separator": "",
+  "long_sheet_mm": null,
   "open_explorer": false,
   "log_file": "runner.log"
 }

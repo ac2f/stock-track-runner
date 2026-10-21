@@ -12,6 +12,9 @@ DEFAULT_CONFIG = {
     # Bos birakilirsa Corel eklentisindeki adres ve anahtar kullanilir.
     "server": "",
     "api_key": "",
+    # Dukkandaki yerel StockTrack sunucusu (replika); ana sunucu yanit
+    # vermezse ona baglanilir. Bos: Corel eklentisinin "yerel sunucu" ayari.
+    "fallback_server": "",
     "poll_seconds": 30,
     "day_folders": {
         "base_dir": "",
@@ -91,6 +94,11 @@ class Config:
             server = addon["server"]
             source = "Corel eklentisi"
         return server, key, source
+
+    def fallback(self):
+        """Yerel sunucu adresi: config.json, yoksa Corel eklentisi (5 Local srv)."""
+        own = (self["fallback_server"] or "").strip().rstrip("/")
+        return own or self.addon().get("server2", "")
 
     def group_separator(self):
         return self["group_separator"] or self.addon().get("separator") or "--"

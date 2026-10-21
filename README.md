@@ -114,6 +114,7 @@ Kaydettiğiniz anda geçerli olur, yeniden başlatmak gerekmez.
 | `enabled` | `false` runner'ı durdurur (program açık kalır). |
 | `server` | StockTrack adresi, `/api/v1` ile: `http://192.168.1.50/api/v1`, `https://stok.ornek.com/api/v1`. Boşsa Corel eklentisindeki |
 | `api_key` | Dükkânın Corel anahtarı. Boşsa Corel eklentisindeki |
+| `fallback_server` | Dükkândaki **yerel StockTrack sunucusu** (replika), `/api/v1` ile. Ana sunucu cevap vermezse (ya da 502/503/504) runner ona bağlanır; 5 dakika önce ona sorar. Boşsa Corel eklentisinin *Local srv* (Job setup `5`) ayarı. |
 | `poll_seconds` | Kaç saniyede bir bakılacağı (varsayılan 30) |
 | `day_folders.base_dir` | Boşsa CDR Auto Renamer'ınki; doluysa bu dizin ve aşağıdaki biçim |
 | `day_folders.renamer_config` | CDR Auto Renamer'ın ayar dosyası |
@@ -143,6 +144,7 @@ ve açtığı müşteri klasörünü teklife bildirir.
 | Sorun: "anahtar geçersiz" | StockTrack'te yeni anahtar üretildi: eklentiye (ya da `config.json`'a) yenisini yazın. |
 | Sorun: "Gün klasörü bilinmiyor" | Corel eklentisinde gün klasörü kökünü ya da `config.json`'da `day_folders.base_dir`'i yazın. |
 | Sorun: "uç bulunamadı" | StockTrack sunucusu eski: son sürüme güncelleyin. |
+| Durumda "ana sunucu yanıt vermiyor; yerel sunucu kullanılıyor" | İnternet ya da merkez gitmiş; runner dükkândaki yerel sunucuyla çalışıyor. Klasör bildirimleri yerel sunucuda tutulur, bağlantı gelince merkeze aktarılır. |
 | Klasör başka yerde açılmış | Durum penceresinde gün klasörünün *kaynağına* bakın; doğrusunu eklentide ya da `config.json`'da yazın, sonra teklifte **Klasörleri yeniden iste**. |
 
 ## Corel eklentisiyle birlikte

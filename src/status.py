@@ -85,6 +85,8 @@ def describe(status, running_lock):
         conn = "baglandi" if status.get("connected") else "baglanamadi"
         shop = " - %s" % status["shopName"] if status.get("shopName") else ""
         lines.append("Sunucu:       %s  (%s%s; kaynak: %s)" % (status["server"], conn, shop, status.get("serverSource", "?")))
+        if status.get("connected") and status.get("via"):
+            lines.append("              -> ana sunucu yanit vermiyor; %s kullaniliyor" % status["via"])
     if status.get("dayRoot"):
         lines.append("Gun klasoru:  %s  (kaynak: %s)" % (status["dayRoot"], status.get("dayRootSource", "?")))
     if status.get("today"):

@@ -2,6 +2,7 @@
   "enabled": true,
   "server": "",
   "api_key": "",
+  "fallback_server": "",
   "poll_seconds": 30,
   "day_folders": {
     "base_dir": "",

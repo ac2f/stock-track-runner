@@ -13,6 +13,8 @@ REG_PATH = r"Software\VB and VBA Program Settings\ac2fPack\Ayarlar"
 # runner adi -> eklentinin kayit adi (ac2fJob.bas, AC2F_K_JB_*)
 KEYS = {
     "server": "JBSunucuAdresi",
+    # Dukkanin yerel sunucusu (replika): ana sunucu yanit vermezse.
+    "server2": "JBYerelSunucu",
     "api_key": "JBAnahtar",
     "day_root": "JBGunlukKlasorKoku",
     "separator": "JBAyrac",
@@ -44,10 +46,11 @@ def _read_registry():
 
 
 def addon_settings(reader=None):
-    """Eklentinin dolu ayarlari: server, api_key, day_root, separator, long_mm."""
+    """Eklentinin dolu ayarlari: server, server2, api_key, day_root, separator, long_mm."""
     data = (reader or _read_registry)()
-    if "server" in data:
-        data["server"] = data["server"].rstrip("/")
+    for k in ("server", "server2"):
+        if k in data:
+            data[k] = data[k].rstrip("/")
     if "long_mm" in data:
         try:
             data["long_mm"] = float(data["long_mm"].replace(",", "."))

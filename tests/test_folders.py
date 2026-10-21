@@ -306,6 +306,62 @@ class Poll(unittest.TestCase):
             StockTrack("", "k").ping()
 
 
+class LocalServer(unittest.TestCase):
+    """Ana sunucu yanit vermezse (ya da 502/503/504) dukkanin yerel sunucusu."""
+
+    def setUp(self):
+        import stocktrack
+        stocktrack._local_until.clear()
+        FakeServer.calls = []
+        FakeServer.posts = []
+        FakeServer.requested = []
+        FakeServer.jobs = []
+        self.srv = HTTPServer(("127.0.0.1", 0), FakeServer)
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+        self.local = "http://127.0.0.1:%d/api/v1" % self.srv.server_port
+        # Kapali port: baglanti reddedilir (ana sunucu yok).
+        probe = HTTPServer(("127.0.0.1", 0), FakeServer)
+        self.dead = "http://127.0.0.1:%d/api/v1" % probe.server_port
+        probe.server_close()
+
+    def tearDown(self):
+        self.srv.shutdown()
+        self.srv.server_close()
+
+    def test_falls_back_and_prefers_local_for_a_while(self):
+        api = StockTrack(self.dead, "k", timeout=2, fallback=self.local)
+        self.assertEqual(api.ping(), "Acme Reklam")
+        self.assertEqual(api.via, "yerel sunucu")
+        api.report_folders("q1", {"host": "PC", "folder": "D:/x"})
+        self.assertEqual(FakeServer.posts[-1][0], "/api/v1/corel/jobs/q1/folders")
+        # yeni bir istemci (sonraki tur) once yerel sunucuya sorar
+        api2 = StockTrack(self.dead, "k", timeout=2, fallback=self.local)
+        self.assertEqual(api2._servers()[0], self.local)
+
+    def test_real_rejection_is_not_hidden_by_the_local_server(self):
+        api = StockTrack(self.local, "yanlis", timeout=2, fallback=self.local + "/x")
+        with self.assertRaises(R.ServerError) as cm:
+            api.ping()
+        self.assertIn("401", str(cm.exception))
+
+    def test_no_local_server_keeps_the_old_error(self):
+        with self.assertRaises(R.ServerError) as cm:
+            StockTrack(self.dead, "k", timeout=2).ping()
+        self.assertIn("ulasilamiyor", str(cm.exception))
+
+    def test_fallback_from_config_or_addon(self):
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "c.json")
+        with open(p, "w") as f:
+            json.dump({}, f)
+        self.assertEqual(Config(p, addon_reader=lambda: {"server2": "http://10.0.0.9/api/v1/"}).fallback(),
+                         "http://10.0.0.9/api/v1")
+        with open(p, "w") as f:
+            json.dump({"fallback_server": "http://own/api/v1"}, f)
+        self.assertEqual(Config(p, addon_reader=lambda: {"server2": "http://10.0.0.9/api/v1"}).fallback(),
+                         "http://own/api/v1")
+
+
 class AddonSettings(unittest.TestCase):
     """Corel eklentisinin kayit defteri ayarlari (Windows) bos alanlari doldurur."""
 

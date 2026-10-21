@@ -35,7 +35,7 @@ from folders import EMPTY_NOTE, already_done, customer_dir, marker_was_empty, da
 from status import add_recent, describe, now_iso, read_status, write_status
 from stocktrack import ServerError, StockTrack
 
-VERSION = "1.1.1"
+VERSION = "1.2.0"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 STATE_PATH = os.path.join(BASE_DIR, "state.json")
@@ -319,11 +319,12 @@ def check(cfg):
         print("               kokunu ayarlayin ya da config.json'da day_folders.base_dir yazin.")
     server, key, source = cfg.connection()
     print("Sunucu:        %s  (kaynak: %s)" % (server or "YOK", source))
+    print("Yerel sunucu:  %s" % (cfg.fallback() or "yok (ana sunucuya ulasilamazsa bekler)"))
     if not key:
         print("Anahtar:       YOK - StockTrack > Ayarlar > Corel entegrasyonu'ndaki anahtari")
         print("               Corel eklentisine ya da config.json'da api_key'e yazin.")
         return 1
-    api = StockTrack(server, key)
+    api = StockTrack(server, key, fallback=cfg.fallback())
     try:
         print("Baglanti:      baglandi -> %s" % api.ping())
     except ServerError as exc:
@@ -433,7 +434,7 @@ class Loop:
             errors.append("Anahtar yok: StockTrack > Ayarlar > Corel entegrasyonu'ndaki anahtari "
                           "Corel eklentisine ya da config.json'da api_key'e yazin")
         else:
-            api = StockTrack(server, key)
+            api = StockTrack(server, key, fallback=cfg.fallback())
             was_connected = status.get("connected")
             try:
                 if not was_connected or time.time() - self.last_ping > PING_EVERY_SECONDS:
@@ -447,6 +448,8 @@ class Loop:
                 if not was_connected and self.last_error:
                     logger.info("Sunucuya yeniden ulasildi")
                 status["connected"] = True
+                # Yanit yerel sunucudan geldiyse durum penceresinde gorunsun.
+                status["via"] = api.via
             except ServerError as exc:
                 status["connected"] = False
                 errors.append(str(exc))

@@ -7,13 +7,28 @@ klasör açılmaz**; teklif kabul edilip işe dönünce açılır. Corel eklenti
 birebir aynıdır, ikisi aynı klasörleri tanır.
 
 ```
-<gün klasörü>\<müşteri>\001-pleksi-1220x2440--2pcs--2800um-akpolimer-dokme-beyaz\001
-                                                                               \002
-                        002-pleksi-1220x1440--1pcs--2800um-akpolimer-dokme-siyah\001
-                                                                               ሠx900
-                        003-aluminyum-kompozit-1500x5000--1pcs--4000um-alucobond-gumus\001\p001
-                                                                                          \p002
+<gün klasörü>\<müşteri>\001-pleksi-1220x2440--2pcs--2800um-akpolimer-dokme-beyaz--F18-10-2026.merkez.pleksi-beyaz\001
+                                                                                                                \002
+                        002-pleksi-1220x2440--1pcs--2800um-akpolimer-dokme-siyah--F18-10-2026.ozturk-reklam.pleksi-siyah\001
+                                                                                                                \u1220x900
+                        003-aluminyum-kompozit-1500x5000--1pcs--4000um-alucobond-gumus--F18-10-2026.merkez.aluminyum-kompozit-gumus\001\p001
+                        malzeme-F18-10-2026.merkez.pleksi-beyaz\m1220x2440-2800um-akpolimer-dokme-2adet
 ```
+
+**Belirteç** (`F18-10-2026.merkez.pleksi-beyaz`): F + projenin bulunduğu gün
+klasörünün tarihi, malzemenin sahibi (müşterinin kendi malıysa müşteri klasör
+adı, dükkânın stoğuysa dükkânın **klasör kodu**), tür-renk. Klasör CNC'ye ya da
+başka bilgisayara kopyalansa da kimin, hangi günün işi olduğu adından okunur.
+Klasör kodu StockTrack › Ayarlar › Corel entegrasyonu › *Bu dükkânın klasör
+oluşturucusu*'nda yazılır (boşsa dükkân adından).
+
+**Malzeme satışı** (teklifte kesim kalemi olmayan satış kalemi): takım yolu
+klasörü açılmaz (`--2pcs--`, `001`, `002` yok); `malzeme-F…` klasörüne satılan
+her ölçü için bir **`m` dosyası** konur (kullanılan parçadaki `u` dosyası gibi):
+`m1220x2440-2800um-akpolimer-dokme-2adet`. Tabakadan parça satıldıysa dosya
+parçanın ölçüsüyle (`m1220x900-…-1adet`) açılır. Aynı ölçü sonra yine satılırsa
+adet artar ve dosyaya satır eklenir. Aynı tabaka hem satılıp hem kesiliyorsa
+(satış + işleme kalemi) normal takım yolu klasörüdür.
 
 ## Ne yapar
 
@@ -27,21 +42,26 @@ Teklif işe dönüştürüldükten en geç `poll_seconds` (30 sn) sonra:
      gününün klasörü altında yeni müşteri klasörü açılır.
    - `Ozturk Reklam Ltd. Sti` gibi eski (boşluklu) adla açılmış klasörler
      de tanınır.
-2. **Takım yolu klasörleri**: teklifteki her tabaka kalemi için
-   `001-<tür>-<en>x<boy>--<adet>pcs--<kalınlık>um-<marka>-<varyant>-<renk>`.
+2. **Takım yolu klasörleri**: teklifteki her kesilecek tabaka kalemi için
+   `001-<tür>-<en>x<boy>--<adet>pcs--<kalınlık>um-<marka>-<varyant>-<renk>--F<gün>.<sahip>.<tür>-<renk>`.
    - Ölçü, tabakanın **dönüşümden önceki** ölçüsüdür (dönüşüm plakanın
      kalan boyunu düşürür; StockTrack o anki ölçüyü teklif kalemine yazar).
-   - Aynı tür/ebat/kalınlık/marka/varyant/renk **istiflenir**: klasör
-     zaten varsa (eklentinin açtığı da olur) `--2pcs--` → `--3pcs--` olur
-     ve `003` eklenir. Farklı olan sıradaki numarayla açılır.
+   - Aynı tür/ebat/kalınlık/marka/varyant/renk ve **aynı sahip**
+     **istiflenir**: klasör zaten varsa (eklentinin açtığı da olur)
+     `--2pcs--` → `--3pcs--` olur ve `003` eklenir; belirteç ilk açıldığı gibi
+     kalır. Farklı olan (müşterinin kendi malı ile dükkânın malı da) sıradaki
+     numarayla açılır. Belirteci olmayan eski klasöre istiflenirken belirteç
+     eklenir.
    - Tabaka adedi kullanılan alandan hesaplanır: tam tabaka kaleminde
      adet kadar; 3 × 300×400 parça tek tabakaya sığar.
    - Boyu 4000 mm'den uzun tabakaların her `001`, `002` klasörüne `p001`,
      `p002` açılır.
-3. **Kullanılan parça**: tabakanın bir kısmı kullanıldıysa grup klasörüne
+3. **Malzeme satışı**: `malzeme-F…` klasörü ve `m` dosyaları (yukarıda).
+   StockTrack'te dükkân ayarından kapatılabilir.
+4. **Kullanılan parça**: tabakanın bir kısmı kullanıldıysa grup klasörüne
    `u1220x900` dosyası (eklentinin *Used parts* işiyle aynı). Dosya
    zaten varsa dokunulmaz.
-4. Müşteri klasörüne gizli bir `.stocktrack\<teklif>.done` işareti bırakır.
+5. Müşteri klasörüne gizli bir `.stocktrack\<teklif>.done` işareti bırakır.
    Aynı teklif bir daha işlenmez — runner yeniden kurulsa ya da aynı ağ
    klasörünü iki bilgisayar paylaşsa bile.
 
@@ -90,13 +110,43 @@ korunur).
 Program `%LOCALAPPDATA%\StockTrackRunner` klasörüne kurulur. Kaldırmak için
 `uninstall.bat`.
 
+## Her dükkânın klasör oluşturucusu ayrı
+
+Her dükkânın ayarı StockTrack'te ayrıdır (*Ayarlar › Corel entegrasyonu › Bu
+dükkânın klasör oluşturucusu*): açık/kapalı, belirteçteki klasör kodu,
+malzeme satışına klasör, **bu dükkânın gün klasörü kökü**. Runner hangi
+dükkânın anahtarıyla bağlanırsa o dükkânın ayarını okur (10 dakikada bir ve
+yeniden bağlanınca).
+
+Bir bilgisayar **birden çok dükkâna** klasör açıyorsa `config.json`'da
+`shops` listesi yazılır; her dükkân kendi anahtarı, durum dosyası, gün
+klasörü ve nabzıyla ayrı çalışır (StockTrack'te her dükkânın kendi runner
+satırı görünür):
+
+```json
+"shops": [
+  { "name": "Merkez", "api_key": "<Merkez'in Corel anahtarı>",
+    "day_folders": { "base_dir": "D:\\Isler\\Merkez" } },
+  { "name": "Şube",   "api_key": "<Şube'nin Corel anahtarı>",
+    "day_folders": { "base_dir": "D:\\Isler\\Sube" } }
+]
+```
+
+`api_key` boş bırakılan dükkân Corel eklentisindeki anahtarı kullanır;
+`server` boşsa üstteki `server` (o da yoksa eklentininki). İki dükkân aynı
+gün klasörüne düşerse durum penceresi uyarır. Liste boşsa tek dükkân
+(eskisi gibi).
+
 ## Gün klasörü
 
 Corel eklentisiyle aynı öncelikle bulunur:
 
-1. runner `config.json`'daki `day_folders.base_dir` (doluysa),
-2. Corel eklentisinin **gün klasörü kökü** ayarı (*Job setup*),
-3. **CDR Auto Renamer**'ın ayar dosyası
+1. runner `config.json`'daki `day_folders.base_dir` (çok dükkânda dükkânın
+   kendi `day_folders.base_dir`'i),
+2. StockTrack'te dükkânın **gün klasörü kökü** ayarı,
+3. Corel eklentisinin **gün klasörü kökü** ayarı (*Job setup*; eklentinin
+   anahtarı bu dükkânınsa),
+4. **CDR Auto Renamer**'ın ayar dosyası
    (`%LOCALAPPDATA%\CdrAutoRenamer\config.json` → `daily_folders.base_dir`).
 
 Tarih biçimi ve ayraç CDR Auto Renamer'dan gelir; gün klasörü yoksa aynı
@@ -122,6 +172,7 @@ Kaydettiğiniz anda geçerli olur, yeniden başlatmak gerekmez.
 | `group_separator` | Klasör adındaki ayraç; boşsa eklentinin ayarı, o da yoksa `--` |
 | `long_sheet_mm` | Bundan uzun tabakaya `p001`/`p002`; boşsa eklentinin *Long sheet* ayarı, o da yoksa 4000 (0 bölmez) |
 | `open_explorer` | `true` ise açılan müşteri klasörü Gezgin'de açılır |
+| `shops` | Bir bilgisayar birden çok dükkâna klasör açıyorsa dükkân listesi (yukarıda); boşsa tek dükkân |
 
 ## Denetim ve günlük
 
@@ -163,8 +214,9 @@ ve açtığı müşteri klasörünü teklife bildirir.
 python -m unittest discover -s tests
 ```
 
-Testler klasör adlarını, istiflemeyi, uzun tabakayı, kullanılan parça
-dosyasını, eski adlı müşteri klasörünü, gün seçimini, aynı teklifin bir
-kez işlenmesini, nabzı, klasör bildirimini, yeniden istenen teklifi ve
-Corel eklentisi ayarlarının önceliğini (sahte bir StockTrack sunucusuyla)
-dener.
+Testler klasör adlarını ve belirteci, istiflemeyi (sahibe göre ayrı),
+uzun tabakayı, kullanılan parça dosyasını, malzeme satışı klasörünü ve `m`
+dosyalarını, eski adlı müşteri klasörünü, gün seçimini, aynı teklifin bir
+kez işlenmesini, nabzı, klasör bildirimini, yeniden istenen teklifi,
+StockTrack'teki dükkân ayarlarını, iki dükkânın ayrı çalışmasını ve Corel
+eklentisi ayarlarının önceliğini (sahte bir StockTrack sunucusuyla) dener.

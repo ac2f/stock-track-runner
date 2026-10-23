@@ -16,6 +16,7 @@ from stocktrack import StockTrack  # noqa: E402
 
 D = datetime.date
 RULE = {"date_format": "%d-%m-%Y", "separator": "--"}
+TOK = "--F18-10-2026.isletme.pleksi-beyaz"
 
 
 def sheet(**kw):
@@ -51,6 +52,30 @@ class Names(unittest.TestCase):
         self.assertEqual(F.split_group("012-dekota-1560x3050--1pcs"), (12, "dekota-1560x3050", 1, ""))
         self.assertIsNone(F.split_group("exp01--pleksi.dxf"))
         self.assertIsNone(F.split_group("u1220x900"))
+        self.assertIsNone(F.split_group("malzeme-F18-10-2026.merkez.pleksi-beyaz"))
+
+    def test_token_names_day_owner_and_material(self):
+        tok = F.folder_token(D(2026, 10, 18), "Öztürk Reklam", "pleksi", "beyaz")
+        self.assertEqual(tok, "F18-10-2026.ozturk-reklam.pleksi-beyaz")
+        self.assertEqual(F.folder_token(D(2026, 10, 18), "merkez", "pleksi", "", sale=True),
+                         "malzeme-F18-10-2026.merkez.pleksi")
+        # cok uzun sahip ve tur-renk kisaltilir (Windows yol siniri)
+        long_tok = F.folder_token(D(2026, 10, 18), "a" * 50, "aluminyum-kompozit", "gumus-metalik-fircali-ozel")
+        self.assertEqual(long_tok.split(".")[1], "a" * 20)
+        self.assertLessEqual(len(long_tok.split(".")[2]), 40)
+        name = F.group_name(1, "pleksi-1220x2440", 2, "2800um-akpolimer-dokme-beyaz", "--", tok)
+        self.assertEqual(name, "001-pleksi-1220x2440--2pcs--2800um-akpolimer-dokme-beyaz--F18-10-2026.ozturk-reklam.pleksi-beyaz")
+        # belirtec istif anahtarina girmez, ayri okunur
+        self.assertEqual(F.split_group(name), (1, "pleksi-1220x2440", 2, "2800um-akpolimer-dokme-beyaz"))
+        self.assertEqual(F.group_token(name), tok)
+        self.assertEqual(F.token_owner(F.group_token(name)), "ozturk-reklam")
+        bare = F.group_name(12, "dekota-1560x3050", 1, "", "--", "F01-02-2026.merkez.dekota")
+        self.assertEqual(F.split_group(bare), (12, "dekota-1560x3050", 1, ""))
+        self.assertEqual(F.group_token(bare), "F01-02-2026.merkez.dekota")
+        self.assertEqual(F.group_token("001-pleksi-1220x2440--2pcs--2800um"), "")
+        # baska ayracla da
+        self.assertEqual(F.split_group("001-pleksi-1220x2440__2pcs__2800um__F18-10-2026.m.pleksi", "__"),
+                         (1, "pleksi-1220x2440", 2, "2800um"))
 
     def test_use_name_puts_the_sheet_width_first(self):
         self.assertEqual(F.use_name(1220, 900, 1220, 2440), "u1220x900")
@@ -79,17 +104,20 @@ class Groups(unittest.TestCase):
                   variant="", color="gumus", sheetWidthMm=1500, sheetHeightMm=5000,
                   usedWidthMm=1500, usedHeightMm=5000),
         ])
-        report, problems = F.make_groups(self.cust, plan, header="Quote TKF-2026-0007  2026-10-17\n")
+        report, problems = F.make_groups(self.cust, plan, header="Quote TKF-2026-0007  2026-10-17\n",
+                                         day=D(2026, 10, 18))
         self.assertEqual(problems, [])
         t = tree(self.cust)
-        self.assertIn("001-pleksi-1220x2440--3pcs--2800um-akpolimer-dokme-beyaz/003", t)
-        self.assertNotIn("001-pleksi-1220x2440--3pcs--2800um-akpolimer-dokme-beyaz/004", t)
-        self.assertIn("002-pleksi-1220x2440--1pcs--2800um-akpolimer-dokme-siyah/001", t)
-        self.assertIn("002-pleksi-1220x2440--1pcs--2800um-akpolimer-dokme-siyah/u1220x900", t)
-        self.assertIn("003-aluminyum-kompozit-1500x5000--1pcs--4000um-alucobond-gumus/001/p002", t)
-        self.assertNotIn("003-aluminyum-kompozit-1500x5000--1pcs--4000um-alucobond-gumus/001/p003", t)
-        with open(os.path.join(self.cust, "002-pleksi-1220x2440--1pcs--2800um-akpolimer-dokme-siyah",
-                               "u1220x900"), encoding="utf-8") as f:
+        white = "001-pleksi-1220x2440--3pcs--2800um-akpolimer-dokme-beyaz--F18-10-2026.isletme.pleksi-beyaz"
+        black = "002-pleksi-1220x2440--1pcs--2800um-akpolimer-dokme-siyah--F18-10-2026.isletme.pleksi-siyah"
+        acp = "003-aluminyum-kompozit-1500x5000--1pcs--4000um-alucobond-gumus--F18-10-2026.isletme.aluminyum-kompozit-gumus"
+        self.assertIn(white + "/003", t)
+        self.assertNotIn(white + "/004", t)
+        self.assertIn(black + "/001", t)
+        self.assertIn(black + "/u1220x900", t)
+        self.assertIn(acp + "/001/p002", t)
+        self.assertNotIn(acp + "/001/p003", t)
+        with open(os.path.join(self.cust, black, "u1220x900"), encoding="utf-8") as f:
             body = f.read()
         self.assertIn("Quote TKF-2026-0007", body)
         self.assertIn("Used 1220 x 900 mm of the 1220 x 2440 mm sheet", body)
@@ -98,11 +126,49 @@ class Groups(unittest.TestCase):
         os.makedirs(os.path.join(self.cust, "001-pleksi-1220x2440--2pcs--2800um-akpolimer-dokme-beyaz", "002"))
         os.makedirs(os.path.join(self.cust, "004-dekota-1560x3050--1pcs--5000um", "001"))
         open(os.path.join(self.cust, "exp01--pleksi.dxf"), "w").close()
-        F.make_groups(self.cust, F.plan_groups([sheet(quantity=1), sheet(color="mavi")]))
+        F.make_groups(self.cust, F.plan_groups([sheet(quantity=1), sheet(color="mavi")]), day=D(2026, 10, 18))
         t = tree(self.cust)
-        self.assertIn("001-pleksi-1220x2440--3pcs--2800um-akpolimer-dokme-beyaz/003", t)
-        self.assertIn("005-pleksi-1220x2440--1pcs--2800um-akpolimer-dokme-mavi/001", t)
+        # belirteci olmayan (eklentinin eski) gruba istiflenir ve belirtec eklenir
+        self.assertIn("001-pleksi-1220x2440--3pcs--2800um-akpolimer-dokme-beyaz" + TOK + "/003", t)
+        self.assertIn("005-pleksi-1220x2440--1pcs--2800um-akpolimer-dokme-mavi--F18-10-2026.isletme.pleksi-mavi/001", t)
         self.assertIn("exp01--pleksi.dxf", t)
+
+    def test_token_stays_as_first_made_and_owners_do_not_mix(self):
+        first = "001-pleksi-1220x2440--1pcs--2800um-akpolimer-dokme-beyaz--F15-10-2026.merkez.pleksi-beyaz"
+        os.makedirs(os.path.join(self.cust, first, "001"))
+        plan = F.plan_groups([
+            sheet(owner="merkez"),                       # ayni sahip: istif, belirtec 15'inde kalir
+            sheet(itemId="i2", owner="ozturk-reklam"),   # musterinin kendi malzemesi: ayri grup
+        ])
+        F.make_groups(self.cust, plan, day=D(2026, 10, 18))
+        t = tree(self.cust)
+        self.assertIn("001-pleksi-1220x2440--2pcs--2800um-akpolimer-dokme-beyaz--F15-10-2026.merkez.pleksi-beyaz/002", t)
+        self.assertIn("002-pleksi-1220x2440--1pcs--2800um-akpolimer-dokme-beyaz--F18-10-2026.ozturk-reklam.pleksi-beyaz/001", t)
+
+    def test_material_sale_gets_a_material_folder_and_m_file_not_toolpaths(self):
+        sale = [sheet(purpose="sale", owner="merkez", quantity=2),
+                sheet(itemId="i2", purpose="sale", owner="merkez", usedHeightMm=900, quantity=1)]
+        self.assertEqual(F.plan_groups(sale), [])
+        header = "Quote TKF-2026-0009  2026-10-18\n"
+        report, problems = F.make_materials(self.cust, F.plan_materials(sale), header, D(2026, 10, 18), "TKF-2026-0009")
+        self.assertEqual(problems, [])
+        t = tree(self.cust)
+        folder = "malzeme-F18-10-2026.merkez.pleksi-beyaz"
+        self.assertIn(folder + "/m1220x2440-2800um-akpolimer-dokme-2adet", t)
+        self.assertIn(folder + "/m1220x900-2800um-akpolimer-dokme-1adet", t)
+        self.assertFalse(any("pcs" in x for x in t))
+        with open(os.path.join(self.cust, folder, "m1220x900-2800um-akpolimer-dokme-1adet"), encoding="utf-8") as f:
+            body = f.read()
+        self.assertIn("MATERIAL SALE", body)
+        self.assertIn("of the 1220 x 2440 mm sheet", body)
+        # ayni teklif ikinci kez yazilmaz; baska gun baska teklifle ayni olcu adedi artirir
+        F.make_materials(self.cust, F.plan_materials(sale[:1]), header, D(2026, 10, 18), "TKF-2026-0009")
+        self.assertIn(folder + "/m1220x2440-2800um-akpolimer-dokme-2adet", tree(self.cust))
+        F.make_materials(self.cust, F.plan_materials(sale[:1]), "Quote TKF-2026-0011  2026-10-20\n",
+                         D(2026, 10, 20), "TKF-2026-0011")
+        t = tree(self.cust)
+        self.assertIn(folder + "/m1220x2440-2800um-akpolimer-dokme-4adet", t)
+        self.assertNotIn("malzeme-F20-10-2026.merkez.pleksi-beyaz", t)
 
     def test_customer_folder_on_an_earlier_day_and_legacy_names(self):
         old = os.path.join(self.root, "15-10-2026--persembe", "Ozturk Reklam")
@@ -131,12 +197,19 @@ class Groups(unittest.TestCase):
         self.assertTrue(problems)
         self.assertIn("001-pleksi-1220x2440--1pcs--2800um-akpolimer-dokme-beyaz/002", tree(self.cust))
 
+    def test_customer_dir_and_day_gives_the_project_day(self):
+        old = os.path.join(self.root, "15-10-2026--persembe", "ozturk-reklam")
+        os.makedirs(old)
+        self.assertEqual(F.customer_dir_and_day(self.root, RULE, "ozturk-reklam", D(2026, 10, 15), D(2026, 10, 18)),
+                         (old, D(2026, 10, 15)))
+
 
 class FakeServer(BaseHTTPRequestHandler):
     jobs = []
     requested = []
     calls = []
     posts = []
+    settings = None
 
     def _auth(self):
         if self.headers.get("X-Api-Key") != "k":
@@ -151,7 +224,14 @@ class FakeServer(BaseHTTPRequestHandler):
         if not self._auth():
             return
         if self.path.startswith("/api/v1/corel/ping"):
-            body = b"#ac2f-corel 1\nok\tAcme Reklam\n"
+            body = b"#ac2f-corel 1\nok\tAcme Reklam\tacme\n"
+        elif self.path.startswith("/api/v1/corel/folder-settings"):
+            if FakeServer.settings is None:
+                self.send_response(404)
+                self.end_headers()
+                self.wfile.write(b'{"message":"Not Found"}')
+                return
+            body = json.dumps({"success": True, "data": FakeServer.settings}).encode()
         elif self.path.startswith("/api/v1/corel/jobs/requested"):
             body = json.dumps({"success": True, "data": FakeServer.requested}).encode()
         else:
@@ -173,8 +253,12 @@ class FakeServer(BaseHTTPRequestHandler):
         pass
 
 
+WHITE = "001-pleksi-1220x2440--2pcs--2800um-akpolimer-dokme-beyaz"
+
+
 class Poll(unittest.TestCase):
     def setUp(self):
+        FakeServer.settings = None
         FakeServer.calls = []
         FakeServer.posts = []
         FakeServer.requested = []
@@ -204,7 +288,8 @@ class Poll(unittest.TestCase):
         self.assertEqual(R.poll_once(self.cfg, state, self.api), 1)
         day = F.day_folder_name(datetime.date.today())
         t = tree(self.root)
-        self.assertIn(day + "/ozturk-reklam/001-pleksi-1220x2440--2pcs--2800um-akpolimer-dokme-beyaz/002", t)
+        stamp = datetime.date.today().strftime("%d-%m-%Y")
+        self.assertIn(day + "/ozturk-reklam/" + WHITE + "--F%s.isletme.pleksi-beyaz/002" % stamp, t)
         # ikinci tur: ayni teklif yeniden islenmez, istif 4pcs olmaz
         self.assertEqual(R.poll_once(self.cfg, state, self.api), 0)
         # durum dosyasi silinse bile klasordeki isaret tekrari onler
@@ -279,13 +364,54 @@ class Poll(unittest.TestCase):
         FakeServer.requested = FakeServer.jobs
         R.poll_requested(self.cfg, state, self.api)
         R.flush_reports(state, self.api)
-        self.assertIn(day + "/ozturk-reklam/001-pleksi-1220x2440--2pcs--2800um-akpolimer-dokme-beyaz/002",
-                      tree(self.root))
+        self.assertTrue(any(x.startswith(day + "/ozturk-reklam/" + WHITE + "--F") and x.endswith("/002")
+                            for x in tree(self.root)))
         # bir daha istense de ikinci kez istiflenmez
         R.poll_requested(self.cfg, state, self.api)
         R.flush_reports(state, self.api)
         self.assertNotIn(day + "/ozturk-reklam/001-pleksi-1220x2440--4pcs--2800um-akpolimer-dokme-beyaz",
                          tree(self.root))
+
+    def test_shop_settings_from_stocktrack_code_material_and_day_root(self):
+        own_root = os.path.join(self.dir, "MerkezGunluk")
+        FakeServer.settings = {"enabled": True, "code": "merkez", "materialSaleFolders": True,
+                               "dayRoot": own_root, "shopName": "Merkez"}
+        cfgp = os.path.join(self.dir, "c4.json")
+        with open(cfgp, "w") as f:
+            json.dump({"server": self.cfg["server"], "api_key": "k",
+                       "day_folders": {"base_dir": "", "renamer_config": os.path.join(self.dir, "yok.json")}}, f)
+        cfg = Config(cfgp, addon_reader=lambda: {})
+        FakeServer.jobs[0]["shopCode"] = "merkez"
+        FakeServer.jobs[0]["sheets"] = [sheet(quantity=1, owner="merkez"),
+                                        sheet(itemId="i2", color="siyah", purpose="sale", owner="merkez")]
+        status = {}
+        R.Loop(cfg, R.State(os.path.join(self.dir, "s4.json")), status, os.path.join(self.dir, "st4.json")).tick()
+        self.assertIsNone(status["error"])
+        self.assertEqual((status["dayRoot"], status["dayRootSource"]), (own_root, "StockTrack (dukkan ayari)"))
+        day = F.day_folder_name(datetime.date.today())
+        stamp = datetime.date.today().strftime("%d-%m-%Y")
+        t = tree(own_root)
+        self.assertIn(day + "/ozturk-reklam/001-pleksi-1220x2440--1pcs--2800um-akpolimer-dokme-beyaz"
+                      "--F%s.merkez.pleksi-beyaz/001" % stamp, t)
+        self.assertIn(day + "/ozturk-reklam/malzeme-F%s.merkez.pleksi-siyah/m1220x2440-2800um-akpolimer-dokme-1adet"
+                      % stamp, t)
+        report = dict(FakeServer.posts)["/api/v1/corel/jobs/q1/folders"]
+        self.assertTrue(any(r.startswith("malzeme:") for r in report["report"]))
+
+    def test_shop_switched_off_in_stocktrack_opens_nothing(self):
+        FakeServer.settings = {"enabled": False, "code": "merkez", "materialSaleFolders": True, "dayRoot": ""}
+        FakeServer.jobs = []  # sunucu kapali dukkana is gondermez
+        status = {}
+        R.Loop(self.cfg, R.State(os.path.join(self.dir, "s5.json")), status, os.path.join(self.dir, "st5.json")).tick()
+        self.assertIsNone(status["error"])
+        self.assertIn("kapali", status["note"])
+
+    def test_material_sale_folders_off(self):
+        FakeServer.jobs[0]["materialSaleFolders"] = False
+        FakeServer.jobs[0]["sheets"] = [sheet(purpose="sale", owner="acme")]
+        state = R.State(os.path.join(self.dir, "s6.json"))
+        R.poll_once(self.cfg, state, self.api)
+        self.assertFalse(any("malzeme-" in x or "pcs" in x for x in tree(self.root)))
 
     def test_missing_day_folder_is_reported_as_error(self):
         cfgp = os.path.join(self.dir, "c3.json")
@@ -304,6 +430,112 @@ class Poll(unittest.TestCase):
             StockTrack("192.168.1.50/api/v1", "k").ping()
         with self.assertRaises(R.ServerError):
             StockTrack("", "k").ping()
+
+
+class MultiShop(unittest.TestCase):
+    """Bir bilgisayar iki dukkana klasor aciyor: her dukkan kendi anahtari,
+    durum dosyasi, gun klasoru ve nabziyla, ayri ayri."""
+
+    class Two(BaseHTTPRequestHandler):
+        jobs = {}
+        posts = []
+
+        def do_GET(self):
+            key = self.headers.get("X-Api-Key")
+            if key not in self.jobs:
+                self.send_response(401)
+                self.end_headers()
+                return
+            if self.path.startswith("/api/v1/corel/ping"):
+                body = ("#ac2f-corel 1\nok\t%s\t%s\n" % ({"ka": "Merkez", "kb": "Sube"}[key],
+                                                           {"ka": "merkez", "kb": "sube"}[key])).encode()
+            elif self.path.startswith("/api/v1/corel/folder-settings"):
+                body = json.dumps({"enabled": True, "code": {"ka": "merkez", "kb": "sube"}[key],
+                                   "materialSaleFolders": True, "dayRoot": ""}).encode()
+            elif self.path.startswith("/api/v1/corel/jobs/requested"):
+                body = b"[]"
+            else:
+                body = json.dumps(self.jobs[key]).encode()
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length") or 0)
+            MultiShop.Two.posts.append((self.headers.get("X-Api-Key"), self.path,
+                                        json.loads(self.rfile.read(length) or b"{}")))
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def log_message(self, *a):
+            pass
+
+    def setUp(self):
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        job = lambda qid, code: {"id": qid, "quoteNo": qid, "createdAt": now, "convertedAt": now,
+                                 "customerId": "c", "customerFolder": "ali", "customerLabel": "Ali",
+                                 "shopCode": code, "sheets": [sheet(owner=code)]}
+        MultiShop.Two.jobs = {"ka": [job("TA-1", "merkez")], "kb": [job("TB-1", "sube")]}
+        MultiShop.Two.posts = []
+        self.srv = HTTPServer(("127.0.0.1", 0), MultiShop.Two)
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+        self.dir = tempfile.mkdtemp()
+        self.server = "http://127.0.0.1:%d/api/v1" % self.srv.server_port
+
+    def tearDown(self):
+        self.srv.shutdown()
+        self.srv.server_close()
+
+    def test_each_shop_has_its_own_folders_state_and_heartbeat(self):
+        ra, rb = os.path.join(self.dir, "A"), os.path.join(self.dir, "B")
+        cfgp = os.path.join(self.dir, "c.json")
+        with open(cfgp, "w") as f:
+            json.dump({"server": self.server, "shops": [
+                {"name": "Merkez", "api_key": "ka", "day_folders": {"base_dir": ra}},
+                {"name": "Sube", "api_key": "kb", "day_folders": {"base_dir": rb}},
+            ]}, f)
+        cfg = Config(cfgp, addon_reader=lambda: {})
+        old_base = R.BASE_DIR
+        R.BASE_DIR = self.dir
+        try:
+            status = {}
+            loop = R.Loop(cfg, R.State(os.path.join(self.dir, "state.json")), status, os.path.join(self.dir, "st.json"))
+            loop.tick()
+        finally:
+            R.BASE_DIR = old_base
+        self.assertIsNone(status["error"])
+        self.assertEqual([e["shopName"] for e in status["shops"]], ["Merkez", "Sube"])
+        ta = tree(ra)
+        tb = tree(rb)
+        self.assertTrue(any(".merkez.pleksi-beyaz" in x for x in ta))
+        self.assertFalse(any(".sube." in x for x in ta))
+        self.assertTrue(any(".sube.pleksi-beyaz" in x for x in tb))
+        beats = [k for k, p, _ in MultiShop.Two.posts if p.endswith("/runner/heartbeat")]
+        self.assertEqual(sorted(beats), ["ka", "kb"])
+        reports = [(k, p) for k, p, _ in MultiShop.Two.posts if "/folders" in p]
+        self.assertEqual(sorted(reports), [("ka", "/api/v1/corel/jobs/TA-1/folders"),
+                                           ("kb", "/api/v1/corel/jobs/TB-1/folders")])
+        # ikinci dukkanin durum dosyasi ayri
+        self.assertTrue(any(n.startswith("state-") for n in os.listdir(self.dir)))
+
+    def test_same_day_root_for_two_shops_is_a_warning(self):
+        root = os.path.join(self.dir, "Ortak")
+        cfgp = os.path.join(self.dir, "c.json")
+        with open(cfgp, "w") as f:
+            json.dump({"server": self.server, "shops": [
+                {"name": "Merkez", "api_key": "ka", "day_folders": {"base_dir": root}},
+                {"name": "Sube", "api_key": "kb", "day_folders": {"base_dir": root}},
+            ]}, f)
+        cfg = Config(cfgp, addon_reader=lambda: {})
+        old_base = R.BASE_DIR
+        R.BASE_DIR = self.dir
+        try:
+            status = {}
+            R.Loop(cfg, R.State(os.path.join(self.dir, "state.json")), status, os.path.join(self.dir, "st.json")).tick()
+        finally:
+            R.BASE_DIR = old_base
+        self.assertIn("ayni gun klasoru", status["shops"][1]["dayRootWarning"])
 
 
 class LocalServer(unittest.TestCase):

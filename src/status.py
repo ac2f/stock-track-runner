@@ -81,18 +81,26 @@ def describe(status, running_lock):
         lines.append("Durum:        CALISIYOR ama son tur gecikti (%s)" % ago(seconds_since(status.get("lastLoopAt"))))
     else:
         lines.append("Durum:        CALISMIYOR")
-    if status.get("server"):
-        conn = "baglandi" if status.get("connected") else "baglanamadi"
-        shop = " - %s" % status["shopName"] if status.get("shopName") else ""
-        lines.append("Sunucu:       %s  (%s%s; kaynak: %s)" % (status["server"], conn, shop, status.get("serverSource", "?")))
-        if status.get("connected") and status.get("via"):
-            lines.append("              -> ana sunucu yanit vermiyor; %s kullaniliyor" % status["via"])
-    if status.get("dayRoot"):
-        lines.append("Gun klasoru:  %s  (kaynak: %s)" % (status["dayRoot"], status.get("dayRootSource", "?")))
-    if status.get("today"):
-        lines.append("Bugun:        %s" % status["today"])
-    if status.get("dayRootWarning"):
-        lines.append("Uyari:        %s" % status["dayRootWarning"])
+    shops = status.get("shops") or [status]
+    for e in shops:
+        if len(shops) > 1:
+            lines.append("-- Dukkan:    %s" % (e.get("shopName") or e.get("name") or "?"))
+        if e.get("server"):
+            conn = "baglandi" if e.get("connected") else "baglanamadi"
+            shop = " - %s" % e["shopName"] if e.get("shopName") and len(shops) == 1 else ""
+            lines.append("Sunucu:       %s  (%s%s; kaynak: %s)" % (e["server"], conn, shop, e.get("serverSource", "?")))
+            if e.get("connected") and e.get("via"):
+                lines.append("              -> ana sunucu yanit vermiyor; %s kullaniliyor" % e["via"])
+        if e.get("folderCode"):
+            lines.append("Klasor kodu:  %s" % e["folderCode"])
+        if e.get("dayRoot"):
+            lines.append("Gun klasoru:  %s  (kaynak: %s)" % (e["dayRoot"], e.get("dayRootSource", "?")))
+        if e.get("today"):
+            lines.append("Bugun:        %s" % e["today"])
+        if e.get("dayRootWarning"):
+            lines.append("Uyari:        %s" % e["dayRootWarning"])
+        if e.get("note"):
+            lines.append("Not:          %s" % e["note"])
     lines.append("Son hata:     %s" % (status.get("error") or "yok"))
     recent = status.get("recent") or []
     if recent:

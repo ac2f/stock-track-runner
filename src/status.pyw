@@ -157,16 +157,33 @@ class StatusWindow:
         if s.get("server"):
             conn = "  ✓ bağlı" if s.get("connected") else "  ✗ bağlanamadı"
         self.values["server"].configure(text="%s%s   (kaynak: %s)" % (s.get("server") or "—", conn, s.get("serverSource") or "—"))
-        self.values["shop"].configure(text=s.get("shopName") or "—")
-        self.values["day"].configure(text="%s   (kaynak: %s)" % (s.get("dayRoot") or "BİLİNMİYOR", s.get("dayRootSource") or "—"))
+        shops = s.get("shops") or []
+        if shops:
+            # Bir bilgisayar birden çok dükkâna klasör açıyor: her dükkân ayrı satır.
+            self.values["shop"].configure(text="\n".join(
+                "%s  %s  (kod %s)" % (e.get("shopName") or e.get("name") or "?",
+                                      "✓ bağlı" if e.get("connected") else "✗ bağlanamadı", e.get("folderCode") or "—")
+                for e in shops))
+            self.values["day"].configure(text="\n".join(
+                "%s: %s   (kaynak: %s)" % (e.get("shopName") or e.get("name") or "?", e.get("dayRoot") or "BİLİNMİYOR",
+                                           e.get("dayRootSource") or "—")
+                for e in shops))
+            warns = ["%s: %s" % (e.get("shopName") or e.get("name") or "?", w)
+                     for e in shops for w in (e.get("dayRootWarning"), e.get("note")) if w]
+        else:
+            code = " (klasör kodu %s)" % s["folderCode"] if s.get("folderCode") else ""
+            self.values["shop"].configure(text=(s.get("shopName") or "—") + code)
+            self.values["day"].configure(text="%s   (kaynak: %s)" % (s.get("dayRoot") or "BİLİNMİYOR", s.get("dayRootSource") or "—"))
+            warns = [w for w in (s.get("dayRootWarning"), s.get("note")) if w]
         self.values["today"].configure(text=s.get("today") or "—")
-        self.values["warning"].configure(text=s.get("dayRootWarning") or "—")
+        self.values["warning"].configure(text="\n".join(warns) or "—")
         self.values["error"].configure(text=s.get("error") or "yok", foreground="#dc2626" if s.get("error") else "")
         self.version.configure(text="Runner %s · %s" % (s.get("version") or R.VERSION, s.get("host") or R.HOST))
 
         self.tree.delete(*self.tree.get_children())
         for r in s.get("recent") or []:
-            self.tree.insert("", "end", values=(r.get("quoteNo", ""), r.get("customer", ""),
+            who = ("[%s] " % r["shop"] if shops and r.get("shop") else "") + (r.get("customer") or "")
+            self.tree.insert("", "end", values=(r.get("quoteNo", ""), who,
                                                 (r.get("at") or "")[:16].replace("T", " "), r.get("folder", "")))
         self.empty_hint.configure(
             text="" if s.get("recent") else

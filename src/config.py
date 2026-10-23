@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import threading
@@ -26,7 +27,12 @@ DEFAULT_CONFIG = {
     "group_separator": "",
     "long_sheet_mm": None,
     "open_explorer": False,
-    "log_file": "runner.log"
+    "log_file": "runner.log",
+    # Bir bilgisayar birden cok dukkana klasor aciyorsa her dukkan ayri:
+    # [{"name": "Merkez", "api_key": "...", "server": "", "fallback_server": "",
+    #   "day_folders": {"base_dir": "D:\\Isler\\Merkez"}, "enabled": true}, ...]
+    # Bossa tek dukkan: yukaridaki server/api_key (ya da Corel eklentisi).
+    "shops": []
 }
 
 
@@ -112,16 +118,52 @@ class Config:
         except (TypeError, ValueError):
             return 4000.0
 
-    def day_rule(self):
+    def profiles(self):
+        """Klasor acilacak dukkanlar. "shops" bossa tek dukkan (eskisi gibi:
+        sunucu ve anahtar config.json'dan ya da Corel eklentisinden). Her
+        dukkanin: id (durum dosyasi icin), ad, sunucu, anahtar, yerel sunucu,
+        kendi gun klasoru koku, Corel eklentisinin anahtarini mi kullaniyor."""
+        addon = self.addon()
+        shops = [s for s in (self["shops"] or []) if isinstance(s, dict)]
+        if not shops:
+            server, key, source = self.connection()
+            return [{"id": "", "name": "", "server": server, "api_key": key, "source": source,
+                     "fallback": self.fallback(), "base_dir": "", "enabled": True,
+                     "uses_addon": source == "Corel eklentisi" or key == addon.get("api_key")}]
+        top_server, _k, _s = self.connection()
+        out = []
+        for i, s in enumerate(shops):
+            key = (s.get("api_key") or "").strip()
+            source = "runner config.json"
+            if not key and addon.get("api_key"):
+                key, source = addon["api_key"], "Corel eklentisi"
+            server = (s.get("server") or "").strip().rstrip("/") or top_server
+            fallback = (s.get("fallback_server") or "").strip().rstrip("/") or self.fallback()
+            out.append({
+                "id": "" if i == 0 else hashlib.sha1(key.encode("utf-8")).hexdigest()[:8],
+                "name": (s.get("name") or "").strip(),
+                "server": server,
+                "api_key": key,
+                "source": source,
+                "fallback": fallback,
+                "base_dir": ((s.get("day_folders") or {}).get("base_dir") or "").strip(),
+                "enabled": s.get("enabled", True) is not False,
+                "uses_addon": bool(key) and key == addon.get("api_key"),
+            })
+        return out
+
+    def day_rule(self, own_base=None, server_root=None, use_addon=True):
         """Gun klasoru kurali; Corel eklentisiyle ayni oncelik:
-          1) config.json'daki day_folders.base_dir,
-          2) Corel eklentisinin "gun klasoru koku" ayari,
-          3) CDR Auto Renamer'in config.json'u (daily_folders).
-        1'de tarih bicimi ve ayrac config.json'dan, 2-3'te CDR Auto Renamer'dan.
-        Bulunamazsa None. `warning`: dikkat edilmesi gereken durum."""
+          1) config.json'daki day_folders.base_dir (ya da dukkanin kendi koku),
+          2) StockTrack'te dukkanin "gun klasoru koku" ayari,
+          3) Corel eklentisinin "gun klasoru koku" ayari (eklentinin anahtari
+             bu dukkaninsa),
+          4) CDR Auto Renamer'in config.json'u (daily_folders).
+        1'de tarih bicimi ve ayrac config.json'dan, digerlerinde CDR Auto
+        Renamer'dan. Bulunamazsa None. `warning`: dikkat edilmesi gereken durum."""
         own = self["day_folders"] or {}
         rule = {
-            "base_dir": (own.get("base_dir") or "").strip(),
+            "base_dir": (own_base if own_base else (own.get("base_dir") or "")).strip(),
             "date_format": own.get("date_format") or "%d-%m-%Y",
             "separator": own.get("separator") if own.get("separator") is not None else "--",
             "source": "runner config.json",
@@ -142,7 +184,11 @@ class Config:
             rule["date_format"] = daily.get("date_format") or rule["date_format"]
             if daily.get("separator") is not None:
                 rule["separator"] = daily["separator"]
-        addon_root = self.addon().get("day_root")
+        if server_root and server_root.strip():
+            rule["base_dir"] = server_root.strip().rstrip("\\/") or server_root.strip()
+            rule["source"] = "StockTrack (dukkan ayari)"
+            return rule
+        addon_root = self.addon().get("day_root") if use_addon else None
         if addon_root:
             rule["base_dir"] = addon_root.rstrip("\\/") or addon_root
             rule["source"] = "Corel eklentisi"

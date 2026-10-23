@@ -13,5 +13,6 @@
   "group_separator": "",
   "long_sheet_mm": null,
   "open_explorer": false,
-  "log_file": "runner.log"
+  "log_file": "runner.log",
+  "shops": []
 }

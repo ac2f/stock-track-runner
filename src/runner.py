@@ -31,11 +31,13 @@ import time
 from logging.handlers import RotatingFileHandler
 
 from config import Config
-from folders import EMPTY_NOTE, already_done, customer_dir, marker_was_empty, day_folder_name, find_day_dir, make_groups, plan_groups, write_marker
+from folders import (EMPTY_NOTE, already_done, customer_dir_and_day, day_folder_name, find_day_dir,
+                     make_groups, make_materials, marker_was_empty, plan_groups, plan_materials, token,
+                     write_marker)
 from status import add_recent, describe, now_iso, read_status, write_status
 from stocktrack import ServerError, StockTrack
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 STATE_PATH = os.path.join(BASE_DIR, "state.json")
@@ -110,20 +112,33 @@ def start_of_today_iso():
     return now.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(datetime.timezone.utc).isoformat()
 
 
-def process_job(job, cfg, rule, requested=False):
+def process_job(job, cfg, rule, requested=False, shop=None):
     """Bir teklifin klasorlerini acar. (musteri klasoru, yapilanlar, sorunlar).
-    `requested`: StockTrack'ten yeniden istendi; isaret varsa yine atlanir,
-    yalniz o tur hic tabaka acilmamis ve simdi tabaka varsa yeniden acilir."""
+    Kesilecek tabakalar takim yolu klasorune (sonda F<gun>.<sahip>.<tur>-<renk>
+    belirteci), kesimsiz malzeme satisi malzeme-F... klasorune m dosyasi
+    olarak. `shop`: dukkanin StockTrack'teki klasor ayarlari (kod, malzeme
+    satisina klasor). `requested`: StockTrack'ten yeniden istendi; isaret
+    varsa yine atlanir, yalniz o tur hic tabaka acilmamis ve simdi tabaka
+    varsa yeniden acilir."""
+    shop = shop or {}
     root = rule["base_dir"]
-    cdir = customer_dir(root, rule, job["customerFolder"],
-                        local_date(job["createdAt"]), local_date(job["convertedAt"]))
-    plan = plan_groups(job.get("sheets") or [])
+    cdir, day = customer_dir_and_day(root, rule, job["customerFolder"],
+                                     local_date(job["createdAt"]), local_date(job["convertedAt"]))
+    code = token(job.get("shopCode") or shop.get("code")) or "isletme"
+    sheets = job.get("sheets") or []
+    with_materials = job.get("materialSaleFolders", shop.get("materialSaleFolders", True)) is not False
+    plan = plan_groups(sheets, code)
+    mplan = plan_materials(sheets, code) if with_materials else []
     if already_done(cdir, job["id"]):
-        if not (requested and plan and marker_was_empty(cdir, job["id"])):
+        if not (requested and (plan or mplan) and marker_was_empty(cdir, job["id"])):
             return cdir, ["zaten acilmis (isaret var)"], []
     header = "Quote %s  %s\n" % (job["quoteNo"], local_date(job["createdAt"]).isoformat())
-    report, problems = make_groups(cdir, plan, cfg.group_separator(), cfg.long_sheet_mm(), header)
-    if not plan:
+    report, problems = make_groups(cdir, plan, cfg.group_separator(), cfg.long_sheet_mm(), header, day)
+    if mplan:
+        r2, p2 = make_materials(cdir, mplan, header, day, job["quoteNo"])
+        report += r2
+        problems += p2
+    if not plan and not mplan:
         report.append(EMPTY_NOTE)
     write_marker(cdir, job, report + problems)
     for p in problems:
@@ -131,9 +146,9 @@ def process_job(job, cfg, rule, requested=False):
     return cdir, report, problems
 
 
-def handle_job(job, cfg, rule, state, status=None, requested=False):
+def handle_job(job, cfg, rule, state, status=None, requested=False, shop=None):
     """Klasorleri acar, bildirilecekler listesine ve son islere ekler."""
-    cdir, report, problems = process_job(job, cfg, rule, requested)
+    cdir, report, problems = process_job(job, cfg, rule, requested, shop)
     logger.info("%s -> %s\n    %s", job["quoteNo"], cdir, "\n    ".join(report + problems))
     state.done[job["id"]] = job["convertedAt"]
     state.unreported[job["id"]] = {
@@ -147,6 +162,7 @@ def handle_job(job, cfg, rule, state, status=None, requested=False):
         add_recent(status, {
             "quoteId": job["id"],
             "quoteNo": job["quoteNo"],
+            "shop": (shop or {}).get("shopName") or "",
             "customer": job.get("customerLabel") or job.get("customerFolder"),
             "folder": cdir,
             "at": now_iso(),
@@ -157,10 +173,10 @@ def handle_job(job, cfg, rule, state, status=None, requested=False):
     return cdir
 
 
-def poll_once(cfg, state, api, status=None, errors=None):
+def poll_once(cfg, state, api, status=None, errors=None, rule=None, shop=None):
     """Bekleyen donusumleri isler; islenen sayisi. Sunucu ya da klasor
     hatasinda durur, sira bozulmasin diye kalanlar bir sonraki tura kalir."""
-    rule = cfg.day_rule()
+    rule = rule or cfg.day_rule()
     if not rule:
         msg = ("Gun klasoru bilinmiyor: Corel eklentisinde ya da CDR Auto Renamer'da gun klasoru "
                "kokunu ayarlayin ya da config.json'da day_folders.base_dir yazin.")
@@ -177,7 +193,7 @@ def poll_once(cfg, state, api, status=None, errors=None):
         fresh = [j for j in jobs if j["id"] not in state.done]
         for job in fresh:
             try:
-                handle_job(job, cfg, rule, state, status)
+                handle_job(job, cfg, rule, state, status, shop=shop)
             except OSError as exc:
                 msg = "%s icin klasor acilamadi: %s (bir sonraki turda yeniden)" % (job["quoteNo"], exc)
                 logger.error(msg)
@@ -196,11 +212,11 @@ def poll_once(cfg, state, api, status=None, errors=None):
             state.cursor = nxt.isoformat()
 
 
-def poll_requested(cfg, state, api, status=None, errors=None):
+def poll_requested(cfg, state, api, status=None, errors=None, rule=None, shop=None):
     """StockTrack ekranindan "klasorleri yeniden iste" denen teklifler.
     Daha once islenmis olsa da bakilir; musteri klasorundeki isaret
     varsa ikinci kez istiflenmez, yalniz klasor yeniden bildirilir."""
-    rule = cfg.day_rule()
+    rule = rule or cfg.day_rule()
     if not rule:
         return 0
     count = 0
@@ -208,7 +224,7 @@ def poll_requested(cfg, state, api, status=None, errors=None):
         if job["id"] in state.unreported:
             continue  # acildi, bildirimi bekliyor
         try:
-            handle_job(job, cfg, rule, state, status, requested=True)
+            handle_job(job, cfg, rule, state, status, requested=True, shop=shop)
         except OSError as exc:
             msg = "%s icin klasor acilamadi: %s" % (job["quoteNo"], exc)
             logger.error(msg)
@@ -302,40 +318,61 @@ def check(cfg):
     print("Ayar dosyasi:  %s" % CONFIG_PATH)
     addon = cfg.addon()
     print("Corel eklentisi ayarlari: %s" % (", ".join(sorted(addon)) if addon else "bulunamadi"))
-    rule = cfg.day_rule()
+    profiles = cfg.profiles()
     ok = True
-    if rule:
-        today = datetime.date.today()
-        d = find_day_dir(rule["base_dir"], today, rule["date_format"], rule["separator"])
-        print("Gun klasoru:   %s  (kaynak: %s)" % (rule["base_dir"], rule["source"]))
-        print("Bugun:         %s%s" % (today_path(rule), "" if d else "  (henuz yok, ilk iste acilir)"))
-        if not os.path.isdir(rule["base_dir"]):
-            print("               UYARI: bu klasor yok; ilk iste olusturulacak.")
-        if rule.get("warning"):
-            print("Uyari:         %s" % rule["warning"])
-    else:
-        ok = False
-        print("Gun klasoru:   BILINMIYOR - Corel eklentisinde ya da CDR Auto Renamer'da gun klasoru")
-        print("               kokunu ayarlayin ya da config.json'da day_folders.base_dir yazin.")
-    server, key, source = cfg.connection()
-    print("Sunucu:        %s  (kaynak: %s)" % (server or "YOK", source))
-    print("Yerel sunucu:  %s" % (cfg.fallback() or "yok (ana sunucuya ulasilamazsa bekler)"))
-    if not key:
-        print("Anahtar:       YOK - StockTrack > Ayarlar > Corel entegrasyonu'ndaki anahtari")
-        print("               Corel eklentisine ya da config.json'da api_key'e yazin.")
-        return 1
-    api = StockTrack(server, key, fallback=cfg.fallback())
-    try:
-        print("Baglanti:      baglandi -> %s" % api.ping())
-    except ServerError as exc:
-        print("Baglanti:      %s" % exc)
-        return 1
-    try:
-        api.jobs(start_of_today_iso(), 1)
-        print("Is listesi:    tamam (sunucu runner'i destekliyor)")
-    except ServerError as exc:
-        print("Is listesi:    %s" % exc)
-        ok = False
+    roots = {}
+    for prof in profiles:
+        if len(profiles) > 1:
+            print("")
+            print("== Dukkan: %s" % (prof["name"] or "(adsiz)"))
+        if not prof["enabled"]:
+            print("Durum:         kapali (config.json'da enabled=false)")
+            continue
+        print("Sunucu:        %s  (kaynak: %s)" % (prof["server"] or "YOK", prof["source"]))
+        print("Yerel sunucu:  %s" % (prof["fallback"] or "yok (ana sunucuya ulasilamazsa bekler)"))
+        if not prof["api_key"]:
+            print("Anahtar:       YOK - StockTrack > Ayarlar > Corel entegrasyonu'ndaki anahtari")
+            print("               Corel eklentisine ya da config.json'a yazin.")
+            ok = False
+            continue
+        api = StockTrack(prof["server"], prof["api_key"], fallback=prof["fallback"])
+        settings = None
+        try:
+            print("Baglanti:      baglandi -> %s" % api.ping())
+            settings = api.folder_settings()
+        except ServerError as exc:
+            print("Baglanti:      %s" % exc)
+            ok = False
+        if settings:
+            print("Klasor ayari:  %s; kod %s; malzeme satisina klasor %s" % (
+                "ACIK" if settings.get("enabled", True) else "KAPALI (StockTrack'te)",
+                settings.get("code") or "-", "evet" if settings.get("materialSaleFolders", True) else "hayir"))
+        rule = cfg.day_rule(prof["base_dir"], (settings or {}).get("dayRoot"), prof["uses_addon"] or len(profiles) == 1)
+        if rule:
+            today = datetime.date.today()
+            d = find_day_dir(rule["base_dir"], today, rule["date_format"], rule["separator"])
+            print("Gun klasoru:   %s  (kaynak: %s)" % (rule["base_dir"], rule["source"]))
+            print("Bugun:         %s%s" % (today_path(rule), "" if d else "  (henuz yok, ilk iste acilir)"))
+            if not os.path.isdir(rule["base_dir"]):
+                print("               UYARI: bu klasor yok; ilk iste olusturulacak.")
+            if rule.get("warning"):
+                print("Uyari:         %s" % rule["warning"])
+            other = roots.get(os.path.normcase(rule["base_dir"]))
+            if other is not None:
+                print("Uyari:         %s ile ayni gun klasoru; dukkanlara ayri kok verin." % (other or "ilk dukkan"))
+            roots[os.path.normcase(rule["base_dir"])] = prof["name"]
+        else:
+            ok = False
+            print("Gun klasoru:   BILINMIYOR - StockTrack'te dukkanin gun klasoru kokunu, Corel eklentisinde")
+            print("               ya da config.json'da day_folders.base_dir'i yazin.")
+        if settings is not None or ok:
+            try:
+                api.jobs(start_of_today_iso(), 1)
+                print("Is listesi:    tamam (sunucu runner'i destekliyor)")
+            except ServerError as exc:
+                print("Is listesi:    %s" % exc)
+                ok = False
+    print("")
     running = lock_held()
     print("Calisiyor mu:  %s" % ("evet" if running else "HAYIR - Windows acilisinda baslar ya da durum penceresinden baslatin"))
     print("Hatirlatma:    klasorler teklif ISE DONUSTURULUNCE acilir (teklif olusturulunca degil).")
@@ -385,11 +422,12 @@ def main():
     status = read_status(STATUS_PATH)
     status.update({"version": VERSION, "pid": os.getpid(), "host": HOST, "startedAt": now_iso(),
                    "error": None, "connected": False})
-    server, _key, source = cfg.connection()
-    rule = cfg.day_rule()
-    logger.info("StockTrack Runner %s basliyor: %s, sunucu %s (%s), gun klasoru %s (%s)",
-                VERSION, HOST, server or "YOK", source,
-                rule["base_dir"] if rule else "BILINMIYOR", rule["source"] if rule else "-")
+    for prof in cfg.profiles():
+        rule = cfg.day_rule(prof["base_dir"], None, prof["uses_addon"] or len(cfg.profiles()) == 1)
+        logger.info("StockTrack Runner %s basliyor: %s%s, sunucu %s (%s), gun klasoru %s (%s)",
+                    VERSION, HOST, (" [%s]" % prof["name"]) if prof["name"] else "",
+                    prof["server"] or "YOK", prof["source"],
+                    rule["base_dir"] if rule else "BILINMIYOR", rule["source"] if rule else "-")
 
     loop = Loop(cfg, state, status)
     while True:
@@ -401,57 +439,67 @@ def main():
         wait(poll)
 
 
-class Loop:
-    """Bir tur: ayarlari tazele, isleri isle, bildir, nabiz gonder, durumu yaz."""
+class ShopRunner:
+    """Bir dukkanin klasor olusturucusu: kendi anahtari, durum dosyasi
+    (nereye kadar bakildi), gun klasoru, StockTrack'teki klasor ayarlari ve
+    nabzi. Bir bilgisayar birden cok dukkana klasor acarsa her biri ayri."""
 
-    def __init__(self, cfg, state, status, status_path=None):
+    def __init__(self, cfg, profile, state=None):
         self.cfg = cfg
-        self.state = state
-        self.status = status
-        self.status_path = status_path or STATUS_PATH
+        self.profile = profile
+        sid = profile["id"]
+        self.state = state or State(STATE_PATH if not sid else os.path.join(BASE_DIR, "state-%s.json" % sid))
         self.last_error = None
         self.last_ping = 0.0
+        self.settings = None
+        self.shop_name = ""
 
-    def tick(self):
-        cfg, state, status = self.cfg, self.state, self.status
-        cfg.reload_if_changed()
-        poll = max(5, int(cfg["poll_seconds"] or 30))
-        server, key, source = cfg.connection()
-        rule = cfg.day_rule()
-        status.update({
-            "pollSeconds": poll,
-            "server": server,
-            "serverSource": source,
-            "dayRoot": rule["base_dir"] if rule else None,
-            "dayRootSource": rule["source"] if rule else None,
-            "dayRootWarning": rule.get("warning") if rule else None,
-            "today": today_path(rule),
-        })
+    def tick(self, poll, status, single):
+        """Bir tur; bu dukkanin durum satiri (dict)."""
+        cfg, prof, state = self.cfg, self.profile, self.state
+        entry = {"name": prof["name"], "server": prof["server"], "serverSource": prof["source"]}
         errors = []
-        if not cfg["enabled"]:
+        rule = None
+        if not prof["enabled"]:
+            errors.append("config.json'da bu dukkan kapali (enabled=false)")
+        elif not cfg["enabled"]:
             errors.append("config.json'da enabled=false: runner duraklatildi")
-        elif not key:
+        elif not prof["api_key"]:
             errors.append("Anahtar yok: StockTrack > Ayarlar > Corel entegrasyonu'ndaki anahtari "
-                          "Corel eklentisine ya da config.json'da api_key'e yazin")
+                          "Corel eklentisine ya da config.json'a yazin")
         else:
-            api = StockTrack(server, key, fallback=cfg.fallback())
-            was_connected = status.get("connected")
+            api = StockTrack(prof["server"], prof["api_key"], fallback=prof["fallback"])
+            was_connected = entry_connected(status, prof, single)
             try:
                 if not was_connected or time.time() - self.last_ping > PING_EVERY_SECONDS:
-                    status["shopName"] = api.ping()
+                    self.shop_name = api.ping()
+                    # StockTrack'teki dukkan ayari: kapali mi, kod, gun klasoru koku.
+                    self.settings = api.folder_settings()
                     self.last_ping = time.time()
-                n = poll_once(cfg, state, api, status, errors)
-                n += poll_requested(cfg, state, api, status, errors)
+                settings = dict(self.settings or {})
+                settings.setdefault("shopName", self.shop_name)
+                rule = cfg.day_rule(prof["base_dir"], settings.get("dayRoot"), prof["uses_addon"] or single)
+                if self.settings and self.settings.get("enabled") is False:
+                    entry["note"] = "StockTrack'te bu dukkanin klasor olusturucusu kapali"
+                elif not rule:
+                    errors.append("Gun klasoru bilinmiyor: StockTrack'te dukkanin gun klasoru kokunu, Corel "
+                                  "eklentisinde ya da CDR Auto Renamer'da gun klasoru kokunu ayarlayin ya da "
+                                  "config.json'da day_folders.base_dir yazin.")
+                    logger.error(errors[-1])
+                else:
+                    n = poll_once(cfg, state, api, status, errors, rule, settings)
+                    n += poll_requested(cfg, state, api, status, errors, rule, settings)
+                    if n:
+                        logger.info("%s%d teklif icin klasorler acildi",
+                                    (prof["name"] + ": ") if prof["name"] else "", n)
                 flush_reports(state, api)
-                if n:
-                    logger.info("%d teklif icin klasorler acildi", n)
                 if not was_connected and self.last_error:
                     logger.info("Sunucuya yeniden ulasildi")
-                status["connected"] = True
+                entry["connected"] = True
                 # Yanit yerel sunucudan geldiyse durum penceresinde gorunsun.
-                status["via"] = api.via
+                entry["via"] = api.via
             except ServerError as exc:
-                status["connected"] = False
+                entry["connected"] = False
                 errors.append(str(exc))
             try:
                 api.heartbeat({
@@ -465,13 +513,99 @@ class Loop:
                 })
             except ServerError:
                 pass  # baglanti hatasi zaten yukarida yazildi
+        if rule is None and prof["enabled"] and not prof["api_key"]:
+            rule = cfg.day_rule(prof["base_dir"], None, prof["uses_addon"] or single)
         error = "; ".join(errors) or None
         # ayni hatayi her turda tekrar yazma
         if error and error != self.last_error:
-            logger.warning("%s", error)
+            logger.warning("%s%s", (prof["name"] + ": ") if prof["name"] else "", error)
         self.last_error = error
-        status["error"] = error
-        status["pendingReports"] = len(state.unreported)
+        entry.update({
+            "shopName": self.shop_name or (self.settings or {}).get("shopName"),
+            "folderCode": (self.settings or {}).get("code"),
+            "dayRoot": rule["base_dir"] if rule else None,
+            "dayRootSource": rule["source"] if rule else None,
+            "dayRootWarning": rule.get("warning") if rule else None,
+            "today": today_path(rule),
+            "error": error,
+            "pendingReports": len(state.unreported),
+        })
+        entry.setdefault("connected", False)
+        return entry
+
+
+def entry_connected(status, prof, single):
+    if single:
+        return status.get("connected")
+    for e in status.get("shops") or []:
+        if e.get("name") == prof["name"]:
+            return e.get("connected")
+    return False
+
+
+class Loop:
+    """Bir tur: ayarlari tazele, her dukkanin islerini isle, bildir, nabiz
+    gonder, durumu yaz. Tek dukkanda durum dosyasi eskisi gibidir; birden
+    cok dukkanda ilk dukkanin satiri ustte, hepsi "shops" altinda."""
+
+    def __init__(self, cfg, state, status, status_path=None):
+        self.cfg = cfg
+        self.state = state
+        self.status = status
+        self.status_path = status_path or STATUS_PATH
+        self.runners = {}
+
+    def _runners(self):
+        profiles = self.cfg.profiles()
+        out = []
+        for i, prof in enumerate(profiles):
+            key = (prof["id"], prof["api_key"])
+            r = self.runners.get(key)
+            if r is None:
+                r = ShopRunner(self.cfg, prof, self.state if i == 0 else None)
+                self.runners[key] = r
+            r.profile = prof
+            out.append(r)
+        return out
+
+    def tick(self):
+        cfg, status = self.cfg, self.status
+        cfg.reload_if_changed()
+        poll = max(5, int(cfg["poll_seconds"] or 30))
+        runners = self._runners()
+        single = len(runners) == 1
+        entries = [r.tick(poll, status, single) for r in runners]
+        # Iki dukkan ayni gun klasorune yaziyorsa uyar (her dukkanin klasoru ayri olmali).
+        seen = {}
+        for e in entries:
+            root = os.path.normcase(e.get("dayRoot") or "")
+            if root and root in seen and not single:
+                e["dayRootWarning"] = ("%s ile ayni gun klasoru; StockTrack'te ya da config.json'da "
+                                       "dukkanlara ayri kok verin" % (seen[root] or "ilk dukkan"))
+            seen.setdefault(root, e.get("name"))
+        first = entries[0]
+        status.update({
+            "pollSeconds": poll,
+            "server": first.get("server"),
+            "serverSource": first.get("serverSource"),
+            "dayRoot": first.get("dayRoot"),
+            "dayRootSource": first.get("dayRootSource"),
+            "dayRootWarning": first.get("dayRootWarning"),
+            "today": first.get("today"),
+            "connected": first.get("connected"),
+            "via": first.get("via"),
+            "shopName": first.get("shopName"),
+            "folderCode": first.get("folderCode"),
+            "note": first.get("note"),
+        })
+        if single:
+            status.pop("shops", None)
+            status["error"] = first.get("error")
+        else:
+            status["shops"] = entries
+            errs = ["%s: %s" % (e.get("name") or e.get("shopName") or "?", e["error"]) for e in entries if e.get("error")]
+            status["error"] = "; ".join(errs) or None
+        status["pendingReports"] = sum(e.get("pendingReports") or 0 for e in entries)
         status["lastLoopAt"] = now_iso()
         write_status(self.status_path, status)
         return poll

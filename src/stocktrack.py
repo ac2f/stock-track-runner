@@ -112,6 +112,24 @@ class StockTrack:
         parts = lines[0].split("\t") if lines else []
         return parts[1] if len(parts) > 1 else ""
 
+    def folder_settings(self):
+        """Dukkanin klasor olusturucu ayarlari (StockTrack > Ayarlar > Corel):
+        {enabled, code, materialSaleFolders, dayRoot, shopName}. Eski sunucuda
+        (uc yok) None."""
+        try:
+            text = self._get("/corel/folder-settings")
+        except ServerError as exc:
+            if "HTTP 404" in str(exc):
+                return None
+            raise
+        try:
+            body = json.loads(text)
+        except ValueError:
+            return None
+        if isinstance(body, dict) and "data" in body:
+            body = body["data"]
+        return body if isinstance(body, dict) else None
+
     def jobs(self, since=None, limit=50):
         """Bu andan (dahil) sonra ise donusturulen teklifler, eskiden yeniye."""
         return self._list(self._get("/corel/jobs", {"since": since, "limit": limit}))
